@@ -1,0 +1,253 @@
+version: "3.7"
+services:
+  scaoracle:
+    image: guardrails-scaoracle
+    build:
+      context: ../scaoracle
+    volumes:
+      - ../scaoracle:/app
+    environment:
+      - ENVIRONMENT=local
+      - POSTGRES_URI=postgres://postgres:docker@postgres:5432/guardrails-development
+      - POSTGRES_PASSWORD=docker
+    ports:
+      - 8080:8080
+    depends_on:
+      - postgres
+    networks:
+      - network
+
+  core-api:
+    image: guardrails-core-api
+    build:
+      context: ../core-api
+      target: dev
+    command: sh -c "dockerize -wait tcp://postgres:5432 -timeout 300s npm run migrate && npm run seed && npm run dev"
+    volumes:
+      - ../core-api:/app
+    expose:
+      - 3000
+    environment:
+      - VIRTUAL_PORT=3000
+      - POSTGRES_URI=postgres://postgres:docker@postgres:5432/guardrails-development
+      - VIRTUAL_HOST=core-api.dev.guardrails.io
+      - CORE_API_URI=http://core-api:3000
+      - NEW_RELIC_ENABLED=false
+    depends_on:
+      - nginx
+      - postgres
+    networks:
+      - network
+
+  dashboard:
+    image: node:12-slim
+    command: npm run dev
+    working_dir: /app
+    volumes:
+      - ../dashboard-frontend:/app
+      - ../dashboard-frontend/node_modules:/app/node_modules
+    expose:
+      - 3000
+    environment:
+      - VIRTUAL_PORT=3000
+      - VIRTUAL_HOST=dashboard.dev.guardrails.io
+      - REACT_APP_API_URL=https://api.dev.guardrails.io
+      - REACT_APP_SENTRY_DSN=false
+      - REACT_APP_USE_SEGMENT=false
+    depends_on:
+      - nginx
+    networks:
+      - network
+    stdin_open: true
+
+  api:
+    image: guardrails-api
+    build:
+      context: ../api
+      target: dev
+    command: dockerize -wait tcp://rabbitmq:5672 -wait http://core-api:3000/healthcheck -timeout 300s npm run dev
+    volumes:
+      - ../api:/app
+    expose:
+      - 3000
+    environment:
+      - VIRTUAL_HOST=api.dev.guardrails.io,badges.dev.guardrails.io
+      - VIRTUAL_PORT=3000
+      - DASHBOARD_URL=https://dashboard.dev.guardrails.io
+      - API_EXTERNAL_URL=https://api.dev.guardrails.io
+      - AMQP_URI=amqp://rabbitmq:docker@rabbitmq:5672
+      - AMQP_QUEUE_NAME=guardrails-development
+      - GUARDRAILS_GITLAB_TOKENS_SECRET=62+-6@DL?vEL8Qk'!,%5?KbmWZE}'@H]
+      - GUARDRAILS_GIT_TOKENS_SECRET=DGJB2Dr79p,z-2?6DXtPEKBn?]vP3NJO
+      - GUARDRAILS_JIRA_TOKENS_SECRET=EULS4Es83n,a-3?3EToEALVn?]xT2ELK
+      - GUARDRAILS_API_KEY_SECRET=?vC?27UTi%u!8umd3JhfK+@y+JUpeBij
+      - GUARDRAILS_BADGES_TOKEN_SECRET=something
+      - GUARDRAILS_CLI_TOKEN_SECRET=just-a-secreT
+      - GUARDRAILS_JWT_TOKEN_SECRET=_jhN8(Dru7JS^HaKAWe%a26_
+      - GUARDRAILS_SAML_JWT_TOKEN_SECRET=_3vQ3(Fvg5LS^GsEVEr%b49_
+      - GUARDRAILS_SESSION_KEY_1=xahPho~dameeceFaite`f9hu
+      - GUARDRAILS_SESSION_KEY_2=lei9Hedee9Thaj.i8aef1lia
+      - GUARDRAILS_ADMIN_TOKEN=youshallnotpass
+      - CORE_API_URI=http://core-api:3000
+      - STORAGE_HOST=minio.dev.guardrails.io
+      - STORAGE_ACCESS_KEY=guardrails
+      - STORAGE_SECRET_KEY=guardrails.io
+      - STORAGE_PORT=9000
+      - NEW_RELIC_ENABLED=false
+    depends_on:
+      - nginx
+      - rabbitmq
+      - core-api
+      - redis
+    networks:
+      - network
+
+  worker:
+    image: guardrails-worker
+    build:
+      context: ../worker
+      target: dev
+    command: dockerize -wait tcp://rabbitmq:5672 -timeout 60s npm run dev
+    volumes:
+      - ../worker:/app
+      - /tmp:/tmp
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    expose:
+      - 3000
+    ports:
+      - 3001:3000
+    environment:
+      - VIRTUAL_HOST=worker.dev.guardrails.io
+      - VIRTUAL_PORT=3001
+      - DOCKER_HOST= # use docker socket
+      - GUARDRAILS_GITLAB_TOKENS_SECRET=62+-6@DL?vEL8Qk'!,%5?KbmWZE}'@H]
+      - AMQP_URI=amqp://rabbitmq:docker@rabbitmq:5672
+      - AMQP_QUEUE_NAME=guardrails-development
+      - CORE_API_URI=http://core-api:3000
+      - FEATURE_SMARTSCAN=true
+      - FEATURE_WORKER_REFRESH=true
+      - FEATURE_DOWNLOAD_SRC_VIA_API=true
+      - STORAGE_HOST=minio.dev.guardrails.io
+      - STORAGE_ACCESS_KEY=guardrails
+      - STORAGE_SECRET_KEY=guardrails.io
+      - STORAGE_PORT=9000
+      - NEW_RELIC_ENABLED=false
+    depends_on:
+      - nginx
+      - core-api
+      - rabbitmq
+      - redis
+    networks:
+      - network
+
+  probot:
+    image: guardrails-probot
+    build:
+      context: ../probot
+      target: dev
+    command: dockerize -wait tcp://rabbitmq:5672 -timeout 60s npm run dev
+    volumes:
+      - ../probot/:/app/
+    expose:
+      - 3000
+    ports:
+      - 3000:3000
+    environment:
+      - VIRTUAL_HOST=probot.dev.guardrails.io
+      - VIRTUAL_PORT=3000
+      - AMQP_URI=amqp://rabbitmq:docker@rabbitmq:5672
+      - AMQP_QUEUE_NAME=guardrails-development
+      - GUARDRAILS_BADGES_TOKEN_SECRET=something
+      - GUARDRAILS_CLI_TOKEN_SECRET=something
+      - GUARDRAILS_GITLAB_TOKENS_SECRET=62+-6@DL?vEL8Qk'!,%5?KbmWZE}'@H]
+      - CORE_API_URI=http://core-api:3000
+      - NEW_RELIC_ENABLED=false
+    depends_on:
+      - core-api
+      - rabbitmq
+      - nginx
+      - redis
+    networks:
+      - network
+
+  # External Dependencies
+  nginx:
+    image: jwilder/nginx-proxy:alpine # https://hub.docker.com/r/jwilder/nginx-proxy/
+    volumes:
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - ./certs:/etc/nginx/certs:ro
+      - ./vhost:/etc/nginx/vhost.d:ro
+    ports:
+      - 80:80 # HTTP Port
+      - 443:443 # HTTPS Port
+    environment:
+      - DHPARAM_GENERATION=0
+    networks:
+      - network
+
+  postgres:
+    image: postgres:11-alpine # https://hub.docker.com/_/postgres
+    volumes:
+      - $HOME/docker/volumes/postgres2:/var/lib/postgresql/data
+    ports:
+      - 5432:5432 # Postgres Port
+    environment:
+      - POSTGRES_DB=guardrails-development
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=docker
+    # healthcheck:
+    #   test: ["CMD", "pg_isready", "-U", "postgres"]
+    #   interval: 5s
+    #   timeout: 30s
+    #   retries: 5
+    networks:
+      - network
+
+  # rabbitmq
+  rabbitmq:
+    image: "rabbitmq:3-management-alpine" # https://hub.docker.com/_/rabbitmq
+    ports:
+      - 5672:5672 # RabbitMQ Port
+      - 15672:15672 # RabbitMQ UI Port
+    environment:
+      - VIRTUAL_HOST=rabbitmq.dev.guardrails.io
+      - VIRTUAL_PORT=15672
+      - RABBITMQ_DEFAULT_USER=rabbitmq
+      - RABBITMQ_DEFAULT_PASS=docker
+    # healthcheck:
+    #   test: ["CMD", "rabbitmqctl", "status"]
+    #   interval: 5s
+    #   timeout: 30s
+    #   retries: 5
+    networks:
+      - network
+
+  minio:
+    image: minio/minio
+    ports:
+      - 443
+    environment:
+      - VIRTUAL_HOST=minio.dev.guardrails.io
+      - VIRTUAL_PORT=443
+      - VIRTUAL_PROTO=https
+      - MINIO_ACCESS_KEY=guardrails
+      - MINIO_SECRET_KEY=guardrails.io
+    volumes:
+      - /tmp:/data/
+      - ./certs/dev.guardrails.io.crt:/root/.minio/certs/public.crt:ro
+      - ./certs/dev.guardrails.io.key:/root/.minio/certs/private.key:ro
+    networks:
+      network:
+        aliases:
+          - minio.dev.guardrails.io
+    command: server --address ":443" /data
+
+  redis:
+    image: "redis:5-alpine"
+    ports:
+      - 6379:6379
+    networks:
+      - network
+
+networks:
+  network:
